@@ -10,6 +10,11 @@ the Jolla `lipstick-jolla-home-qt5` compositor revision whose stock
 `compositor.qml` SHA-256 is recorded in `installer/root-helper`. It is not a
 generic installer for other Sailfish versions.
 
+For a detailed explanation of the compositor, Wayland and X11 models,
+Deskflow-to-application input path, `uinput`, visible-pointer design, and
+every integration change, read
+[the architecture and integration guide](docs/architecture-and-integration.md).
+
 ## What is included
 
 | Path | Purpose |
