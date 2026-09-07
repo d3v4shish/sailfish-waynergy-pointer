@@ -1,0 +1,3 @@
+module Waynergy.Pointer
+plugin waynergypointer
+PointerOverlay 1.0 PointerOverlay.qml

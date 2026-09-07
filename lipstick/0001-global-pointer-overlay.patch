@@ -1,0 +1,66 @@
+--- a/compositor.qml
++++ b/compositor.qml
+@@ -19,6 +19,7 @@
+ import Sailfish.Silica.private 1.0
+ import Sailfish.Lipstick 1.0
+ import com.jolla.lipstick 0.1
++import Waynergy.Pointer 1.0
+ 
+ import "layers"
+ import "launcher"
+@@ -158,7 +159,7 @@
+     property int homeOrientation: Qt.PortraitOrientation
+ 
+     property bool directRendering: appLayer.active && !homeLayer.visible && topmostWindow && topmostWindow.window && !topmostWindow.window.isInProcess
+-                                   && !(dialogLayer.contentItem.children.length > 1 || alarmLayer.contentItem.children.length > 1 || notificationLayer.contentItem.children.length || launcherLayer.visible || overlayLayer.contentItem.childrenRect.width || overlayLayer.contentItem.childrenRect.height)
++                                   && !(dialogLayer.contentItem.children.length > 1 || alarmLayer.contentItem.children.length > 1 || notificationLayer.contentItem.children.length || launcherLayer.visible || overlayLayer.contentItem.childrenRect.width || overlayLayer.contentItem.childrenRect.height || pointerOverlay.allocated)
+     fullscreenSurface: directRendering ? topmostWindow.window.surface : null
+     screenOrientation: {
+         if (orientationLock == "portrait") return Qt.PortraitOrientation
+@@ -1562,6 +1563,9 @@
+             w.parent = null
+             w.destroy()
+         }
++
++        if (pointerOverlay.pointerActive)
++            pointerResyncTimer.restart()
+     }
+ 
+     onWindowRaised: raiseWindow(window)
+@@ -1651,6 +1655,13 @@
+         onTriggered: root._resetIncomingAlarm()
+     }
+ 
++    Timer {
++        id: pointerResyncTimer
++        interval: 250
++        repeat: false
++        onTriggered: pointerOverlay.resyncAfterWindowClose()
++    }
++
+     Connections {
+         target: lipstickSettings
+         onBlankingPolicyChanged: currentAlarm = false
+@@ -1710,6 +1721,22 @@
+         }
+     }
+ 
++    Item {
++        id: pointerOverlayLayer
++        anchors.fill: parent
++        z: 100000
++
++        PointerOverlay {
++            id: pointerOverlay
++            locked: root.deviceIsLocked
++            // Deskflow's client coordinates are fixed to the phone's portrait
++            // output.  Lipstick may swap root dimensions while a window is
++            // opened or closed, so always retain the physical short/long axes.
++            screenWidth: Math.min(root.width, root.height)
++            screenHeight: Math.max(root.width, root.height)
++        }
++    }
++
+     Rectangle {
+         id: dimmingRectangle
+         anchors.fill: parent

@@ -1,0 +1,18 @@
+[Unit]
+Description=Waynergy Deskflow-compatible client for Sailfish
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=WAYNERGY_BIN=/usr/local/bin/waynergy
+Environment=DESKFLOW_HOST=deskflow-server.example
+Environment=DESKFLOW_PORT=24800
+Environment=SAILFISH_SCREEN_NAME=Sailfish
+Environment=SAILFISH_WIDTH=720
+Environment=SAILFISH_HEIGHT=1280
+ExecStart=%h/.local/bin/waynergy-direct
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

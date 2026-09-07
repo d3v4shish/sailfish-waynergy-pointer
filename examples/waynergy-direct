@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+# Point WAYNERGY_BIN at the ARM build installed on the phone or its chroot.
+: "${WAYNERGY_BIN:=/usr/local/bin/waynergy}"
+: "${DESKFLOW_HOST:=deskflow-server.example}"
+: "${DESKFLOW_PORT:=24800}"
+: "${SAILFISH_SCREEN_NAME:=Sailfish}"
+: "${SAILFISH_WIDTH:=720}"
+: "${SAILFISH_HEIGHT:=1280}"
+
+exec "$WAYNERGY_BIN" \
+    -b uinput \
+    -c "$DESKFLOW_HOST" -p "$DESKFLOW_PORT" \
+    -N "$SAILFISH_SCREEN_NAME" \
+    -W "$SAILFISH_WIDTH" -H "$SAILFISH_HEIGHT" \
+    -e -t -n -L info "$@"

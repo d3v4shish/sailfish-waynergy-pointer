@@ -1,0 +1,20 @@
+# Build output
+build/
+*.o
+*.so
+*.so.*
+Makefile
+moc_*.cpp
+plugin.moc
+
+# Device-local settings and credentials
+*.pem
+*.key
+*.crt
+calibration.ini
+waynergy.log
+
+# Sailfish staging directories
+cursor-build/
+sysroot/
+tools/
