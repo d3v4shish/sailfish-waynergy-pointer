@@ -2,7 +2,7 @@
 Type=Application
 Name=Pointer calibration
 Comment=Calibrate the Waynergy pointer indicator
-Exec=env QML2_IMPORT_PATH=/home/nemo/.local/lib/qt5/qml /usr/bin/qmlscene /home/nemo/.local/share/waynergy-pointer-calibrator/Calibrator.qml
+Exec=/usr/bin/qmlscene /usr/share/sailfish-deskflow-setup/Calibrator.qml
 Icon=icon-m-pointer
 X-Nemo-Application-Type=generic
 Categories=Settings;

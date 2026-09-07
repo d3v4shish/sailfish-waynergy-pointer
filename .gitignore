@@ -3,9 +3,14 @@ build/
 *.o
 *.so
 *.so.*
+*.moc
 Makefile
 moc_*.cpp
 plugin.moc
+installer-app/sailfish-deskflow-setup
+release-output/
+*.rpm
+*.tar.gz
 
 # Device-local settings and credentials
 *.pem

@@ -1,0 +1,426 @@
+#!/bin/sh
+# Root-only helper. It is invoked through devel-su by the Sailfish UI.
+set -eu
+umask 077
+
+APP_ID=sailfish-deskflow-setup
+APP_ROOT=/usr/share/$APP_ID
+LIBEXEC=/usr/libexec/$APP_ID
+NEMO_HOME=/home/nemo
+USER_STATE=$NEMO_HOME/.local/share/$APP_ID
+ROOT_STATE=/var/lib/$APP_ID
+COMPOSITOR=/usr/share/lipstick-jolla-home-qt5/compositor.qml
+COMPOSITOR_BACKUP=$ROOT_STATE/compositor.qml.orig
+EXPECTED_STOCK_SHA256=f3589ad2500b153fae3d005cad4b17c07235309d7f8dcad9d17fd898318b4265
+LEGACY_PATCHED_SHA256=9a15fd111eee10671528e649f3288629233d8625a75f6d8eedf304753e7cb69f
+SERVICE=$NEMO_HOME/.config/systemd/user/waynergy.service
+SERVICE_BACKUP=$ROOT_STATE/waynergy.service.orig
+RUNTIME=/etc/$APP_ID/runtime.conf
+UDEV_RULE=/etc/udev/rules.d/70-$APP_ID-uinput.rules
+MARKER=$USER_STATE/activation-confirmed
+STATE_FILE=$USER_STATE/state.ini
+ROOT_CONFIG=$ROOT_STATE/request.ini
+LEGACY_ENV=/var/lib/environment/compositor/waynergy-pointer.conf
+LEGACY_ENV_BACKUP=$ROOT_STATE/waynergy-pointer.conf.orig
+LEGACY_MODULE=$NEMO_HOME/.local/lib/qt5/qml/Waynergy/Pointer
+LEGACY_MODULE_BACKUP=$ROOT_STATE/legacy-pointer-module
+
+phase() { printf 'PHASE=%s\n' "$*"; }
+fail() { printf 'ERROR=%s\nRESULT=FAILED\n' "$*" >&2; exit 1; }
+result() { printf 'RESULT=%s\n' "$1"; }
+
+usage() {
+    echo "Usage: root-helper --install|--restore|--rollback-if-unconfirmed --config FILE" >&2
+    exit 2
+}
+
+mode=
+config=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --install|--restore|--rollback-if-unconfirmed) mode=$1 ;;
+        --config) shift; [ "$#" -gt 0 ] || usage; config=$1 ;;
+        *) usage ;;
+    esac
+    shift
+done
+[ -n "$mode" ] && [ -n "$config" ] || usage
+[ -f "$config" ] || fail "Installer request is missing"
+
+read_value() {
+    key=$1
+    sed -n "s/^$key=//p" "$config" | tail -n 1
+}
+
+load_request() {
+    chroot_path=$(read_value chroot)
+    host=$(read_value host)
+    port=$(read_value port)
+    screen=$(read_value screen)
+    width=$(read_value width)
+    height=$(read_value height)
+}
+
+load_request
+if [ "$mode" = --restore ] && [ -f "$ROOT_CONFIG" ]; then
+    config=$ROOT_CONFIG
+    load_request
+fi
+
+safe_chroot() {
+    case "$chroot_path" in
+        /home/nemo/chroots/?*) ;;
+        *) return 1 ;;
+    esac
+    case "$chroot_path" in */..|*/../*|*[!A-Za-z0-9._/-]*) return 1;; esac
+}
+safe_host() { case "$host" in ''|*[!A-Za-z0-9.-]*) return 1;; esac; }
+safe_screen() { case "$screen" in ''|*[!A-Za-z0-9._-]*) return 1;; esac; }
+safe_number() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -gt 0 ] && [ "$1" -le "$2" ]; }
+
+validate_request() {
+    safe_chroot || fail "Unsafe chroot path"
+    safe_host || fail "Unsafe Deskflow host"
+    safe_screen || fail "Unsafe screen name"
+    safe_number "$port" 65535 || fail "Invalid Deskflow port"
+    safe_number "$width" 8192 || fail "Invalid display width"
+    safe_number "$height" 8192 || fail "Invalid display height"
+}
+
+run_user() {
+    su - nemo -s /bin/sh -c "XDG_RUNTIME_DIR=/run/user/100000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/100000/dbus/user_bus_socket $*"
+}
+
+write_user_state() {
+    pending=$1
+    install -d -o nemo -g nemo -m 0700 "$USER_STATE"
+    {
+        printf 'pending=%s\n' "$pending"
+        printf 'chroot=%s\n' "$chroot_path"
+    } > "$STATE_FILE"
+    chown nemo:nemo "$STATE_FILE"
+    chmod 0600 "$STATE_FILE"
+}
+
+save_root_request() {
+    install -d -m 0700 "$ROOT_STATE"
+    install -m 0600 "$config" "$ROOT_CONFIG"
+}
+
+state_has() {
+    [ -f "$ROOT_STATE/install-state" ] && grep -qx "$1" "$ROOT_STATE/install-state"
+}
+
+valid_chroot() {
+    [ -r "$chroot_path/etc/os-release" ] || return 1
+    grep -q '^ID=debian$' "$chroot_path/etc/os-release" || return 1
+    grep -q '^VERSION_CODENAME=bookworm$' "$chroot_path/etc/os-release" || return 1
+    chroot "$chroot_path" /usr/bin/dpkg --print-architecture 2>/dev/null | grep -qx armhf
+}
+
+manifest_value() {
+    key=$1
+    sed -n "s/^$key=//p" "$APP_ROOT/rootfs-manifest.ini" | tail -n 1
+}
+
+create_chroot() {
+    [ ! -e "$chroot_path" ] || fail "Chroot path exists but is not a valid Debian Bookworm armhf chroot"
+    rootfs_url=$(manifest_value url)
+    rootfs_sha256=$(manifest_value sha256)
+    case "$rootfs_sha256" in
+        ''|*[!0-9a-f]*) fail "No verified rootfs release is configured in this installer" ;;
+    esac
+    [ "${#rootfs_sha256}" -eq 64 ] || fail "Rootfs manifest has an invalid checksum"
+
+    phase "Downloading verified Bookworm armhf rootfs"
+    install -d -m 0755 "$(dirname "$chroot_path")"
+    archive=$ROOT_STATE/bookworm-armhf-minbase.tar.gz.part
+    temporary=$chroot_path.new
+    install -d -m 0700 "$ROOT_STATE"
+    rm -rf "$temporary"
+    curl --fail --location --retry 3 --output "$archive" "$rootfs_url" || fail "Rootfs download failed"
+    actual_sha256=$(sha256sum "$archive" | awk '{print $1}')
+    [ "$actual_sha256" = "$rootfs_sha256" ] || fail "Rootfs checksum verification failed"
+
+    phase "Extracting verified rootfs"
+    install -d -m 0755 "$temporary"
+    tar -xzf "$archive" -C "$temporary" || fail "Rootfs extraction failed"
+    old_chroot_path=$chroot_path
+    chroot_path=$temporary
+    valid_chroot || fail "Extracted rootfs is not Debian Bookworm armhf"
+    chroot_path=$old_chroot_path
+    mv "$temporary" "$chroot_path"
+    rm -f "$archive"
+    printf 'created_chroot=1\n' > "$ROOT_STATE/install-state"
+}
+
+ensure_chroot() {
+    if [ -e "$chroot_path" ]; then
+        valid_chroot || fail "Existing chroot is not Debian Bookworm armhf"
+    else
+        create_chroot
+    fi
+}
+
+install_dependencies() {
+    phase "Installing Waynergy build dependencies"
+    command -v curl >/dev/null 2>&1 || fail "curl is required to download the rootfs"
+    # A release rootfs cannot know the phone's local DNS configuration.  Keep
+    # this file inside the chroot only; the host resolver is never modified.
+    if [ -r /etc/resolv.conf ]; then
+        rm -f "$chroot_path/etc/resolv.conf"
+        cp -L /etc/resolv.conf "$chroot_path/etc/resolv.conf"
+        chmod 0644 "$chroot_path/etc/resolv.conf"
+    fi
+    chroot "$chroot_path" /bin/sh -ec '
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config \
+            libwayland-dev libxkbcommon-dev libtls-dev
+    ' || fail "Cannot install Waynergy build dependencies"
+}
+
+backup_waynergy() {
+    binary=$chroot_path/usr/local/bin/waynergy
+    if [ -e "$binary" ] && [ ! -e "$ROOT_STATE/waynergy.orig" ]; then
+        install -d -m 0700 "$ROOT_STATE"
+        cp -a "$binary" "$ROOT_STATE/waynergy.orig"
+        printf 'waynergy_backup=1\n' >> "$ROOT_STATE/install-state"
+    fi
+}
+
+build_waynergy() {
+    phase "Building custom Waynergy in chroot"
+    backup_waynergy
+    work=/opt/$APP_ID
+    rm -rf "$chroot_path$work"
+    install -d -m 0755 "$chroot_path$work"
+    cp -a "$APP_ROOT/waynergy" "$chroot_path$work/waynergy"
+    chroot "$chroot_path" /bin/sh -ec '
+        work=/opt/sailfish-deskflow-setup
+        rm -rf "$work/build"
+        meson setup "$work/build" "$work/waynergy"
+        sed "s/@VCS_DESC@/sailfish-deskflow-pointer/" \
+            "$work/waynergy/include/ver.h.in" > "$work/build/include/ver.h"
+        sed -i "/vcstagger/c\\ COMMAND = /bin/true" "$work/build/build.ninja"
+        ninja -C "$work/build"
+        install -m 0755 "$work/build/waynergy" /usr/local/bin/waynergy
+    ' || fail "Waynergy build failed"
+    printf 'waynergy_installed=1\n' >> "$ROOT_STATE/install-state"
+}
+
+install_runtime() {
+    phase "Installing Waynergy service and pointer module"
+    [ -x "$chroot_path/usr/local/bin/waynergy" ] || fail "Custom Waynergy binary is missing"
+    [ -f /usr/lib/qt5/qml/Waynergy/Pointer/libwaynergypointer.so ] || fail "Pointer plugin RPM payload is missing"
+
+    # Earlier manual installations exported a per-user QML import path.  The
+    # packaged module is deliberately installed in Qt's system import path, so
+    # disable that override after preserving it for an exact Restore.
+    if [ -e "$LEGACY_ENV" ] && [ ! -e "$LEGACY_ENV_BACKUP" ]; then
+        install -d -m 0700 "$ROOT_STATE"
+        cp -a "$LEGACY_ENV" "$LEGACY_ENV_BACKUP"
+        printf 'legacy_environment_backup=1\n' >> "$ROOT_STATE/install-state"
+    fi
+    if [ -e "$LEGACY_ENV" ]; then
+        rm -f "$LEGACY_ENV"
+        printf 'legacy_environment_removed=1\n' >> "$ROOT_STATE/install-state"
+    fi
+    if [ -d "$LEGACY_MODULE" ] && [ ! -e "$LEGACY_MODULE_BACKUP" ]; then
+        install -d -m 0700 "$ROOT_STATE"
+        mv "$LEGACY_MODULE" "$LEGACY_MODULE_BACKUP"
+        printf 'legacy_module_backup=1\n' >> "$ROOT_STATE/install-state"
+    fi
+
+    install -d -o nemo -g nemo -m 0700 "$USER_STATE/waynergy"
+    cat > "$USER_STATE/waynergy/config.ini" <<EOF
+[pointer]
+socket=/run/display/waynergy-pointer.sock
+EOF
+    chown nemo:nemo "$USER_STATE/waynergy/config.ini"
+    chmod 0600 "$USER_STATE/waynergy/config.ini"
+
+    install -d -m 0755 /etc/$APP_ID "$LIBEXEC"
+    cat > "$RUNTIME" <<EOF
+CHROOT=$chroot_path
+EOF
+    chmod 0644 "$RUNTIME"
+    cat > "$LIBEXEC/waynergy-direct" <<'EOF'
+#!/bin/sh
+set -eu
+. /etc/sailfish-deskflow-setup/runtime.conf
+exec "$CHROOT/lib/ld-linux-armhf.so.3" \
+  --library-path "$CHROOT/usr/local/lib:$CHROOT/usr/lib/arm-linux-gnueabihf:$CHROOT/lib/arm-linux-gnueabihf:$CHROOT/usr/lib:$CHROOT/lib" \
+  "$CHROOT/usr/local/bin/waynergy" "$@"
+EOF
+    chmod 0755 "$LIBEXEC/waynergy-direct"
+
+    if [ -e "$SERVICE" ] && [ ! -e "$SERVICE_BACKUP" ]; then
+        install -d -m 0700 "$ROOT_STATE"
+        cp -a "$SERVICE" "$SERVICE_BACKUP"
+    fi
+    install -d -o nemo -g nemo -m 0700 "$(dirname "$SERVICE")"
+    cat > "$SERVICE" <<EOF
+[Unit]
+Description=Waynergy Deskflow-compatible client for Sailfish
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=HOME=/home/nemo
+Environment=XDG_RUNTIME_DIR=/run/display
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=WAYNERGY_CONF_PATH=$USER_STATE/waynergy
+ExecStart=$LIBEXEC/waynergy-direct -b uinput -c $host -p $port -W $width -H $height -N $screen -e -t -n -l $USER_STATE/waynergy.log -L info
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+    chown nemo:nemo "$SERVICE"
+    chmod 0644 "$SERVICE"
+
+    if [ ! -e /etc/udev/rules.d/70-waynergy-uinput.rules ]; then
+        cat > "$UDEV_RULE" <<'EOF'
+KERNEL=="uinput", OWNER="nemo", GROUP="nemo", MODE="0600"
+EOF
+    fi
+    command -v udevadm >/dev/null 2>&1 && {
+        udevadm control --reload-rules || true
+        udevadm trigger --name-match=uinput || true
+    }
+    su - nemo -s /bin/sh -c 'test -w /dev/uinput' || fail "nemo cannot write /dev/uinput"
+    run_user 'systemctl --user daemon-reload && systemctl --user enable --now waynergy.service' || fail "Cannot start Waynergy user service"
+}
+
+check_compositor_supported() {
+    current_sha256=$(sha256sum "$COMPOSITOR" | awk '{print $1}')
+    if [ "$current_sha256" = "$EXPECTED_STOCK_SHA256" ]; then
+        return 0
+    fi
+    if [ "$current_sha256" = "$LEGACY_PATCHED_SHA256" ] \
+            && grep -q 'import Waynergy.Pointer 1.0' "$COMPOSITOR"; then
+        if [ -e "$COMPOSITOR_BACKUP" ]; then
+            return 0
+        fi
+        legacy_backup=$COMPOSITOR.waynergy-pointer.orig
+        if [ -e "$legacy_backup" ] \
+                && [ "$(sha256sum "$legacy_backup" | awk '{print $1}')" = "$EXPECTED_STOCK_SHA256" ]; then
+            return 0
+        fi
+        fail "Recognized legacy pointer patch has no stock backup"
+    fi
+    fail "Lipstick compositor is not the supported stock version"
+}
+
+apply_compositor_patch() {
+    phase "Applying guarded Lipstick pointer overlay"
+    check_compositor_supported
+    current_sha256=$(sha256sum "$COMPOSITOR" | awk '{print $1}')
+    if [ "$current_sha256" = "$EXPECTED_STOCK_SHA256" ]; then
+        [ -e "$COMPOSITOR_BACKUP" ] || install -m 0644 "$COMPOSITOR" "$COMPOSITOR_BACKUP"
+        patch_file=$APP_ROOT/lipstick/0001-global-pointer-overlay.patch
+        patch --dry-run -p1 -d "$(dirname "$COMPOSITOR")" < "$patch_file" || fail "Lipstick patch does not match stock compositor"
+        patch -p1 -d "$(dirname "$COMPOSITOR")" < "$patch_file" || fail "Lipstick patch failed"
+    elif [ "$current_sha256" = "$LEGACY_PATCHED_SHA256" ] \
+            && grep -q 'import Waynergy.Pointer 1.0' "$COMPOSITOR"; then
+        legacy_backup=$COMPOSITOR.waynergy-pointer.orig
+        if [ ! -e "$COMPOSITOR_BACKUP" ] && [ -e "$legacy_backup" ]; then
+            legacy_sha256=$(sha256sum "$legacy_backup" | awk '{print $1}')
+            [ "$legacy_sha256" = "$EXPECTED_STOCK_SHA256" ] || fail "Legacy compositor backup is not recognized"
+            install -m 0644 "$legacy_backup" "$COMPOSITOR_BACKUP"
+        fi
+        [ -e "$COMPOSITOR_BACKUP" ] || fail "Recognized legacy pointer patch has no stock backup"
+    else
+        fail "Lipstick compositor is not the supported stock version"
+    fi
+    grep -q 'import Waynergy.Pointer 1.0' "$COMPOSITOR" || fail "Pointer overlay is absent after patch"
+}
+
+start_rollback_timer() {
+    phase "Restarting Lipstick with 180-second rollback protection"
+    rm -f "$MARKER"
+    write_user_state 1
+    systemd-run --unit=$APP_ID-rollback --on-active=180s \
+        "$LIBEXEC/root-helper" --rollback-if-unconfirmed --config "$ROOT_CONFIG" || fail "Cannot start rollback timer"
+    run_user 'systemctl --user restart lipstick.service' || fail "Cannot restart Lipstick"
+    result PENDING_CONFIRMATION
+}
+
+restore_runtime() {
+    phase "Restoring previous Deskflow and compositor state"
+    # Do not stop the rollback unit while it is the process doing the restore.
+    # systemd may otherwise terminate this helper before it copies the backup.
+    if [ "$mode" != --rollback-if-unconfirmed ]; then
+        systemctl stop "$APP_ID-rollback.service" 2>/dev/null || true
+    fi
+    run_user 'systemctl --user disable --now waynergy.service' || true
+    restored_service=0
+    if [ -e "$SERVICE_BACKUP" ]; then
+        install -d -o nemo -g nemo -m 0700 "$(dirname "$SERVICE")"
+        install -o nemo -g nemo -m 0644 "$SERVICE_BACKUP" "$SERVICE"
+        restored_service=1
+    else
+        rm -f "$SERVICE"
+    fi
+    run_user 'systemctl --user daemon-reload' || true
+    if [ "$restored_service" -eq 1 ]; then
+        run_user 'systemctl --user enable --now waynergy.service' || true
+    fi
+    rm -f "$RUNTIME" "$LIBEXEC/waynergy-direct" "$UDEV_RULE"
+    rm -rf "$USER_STATE/waynergy"
+    if [ -d "$chroot_path" ]; then
+        if [ -e "$ROOT_STATE/waynergy.orig" ]; then
+            install -d -m 0755 "$chroot_path/usr/local/bin"
+            install -m 0755 "$ROOT_STATE/waynergy.orig" "$chroot_path/usr/local/bin/waynergy"
+        elif state_has 'waynergy_installed=1'; then
+            rm -f "$chroot_path/usr/local/bin/waynergy"
+        fi
+        rm -rf "$chroot_path/opt/$APP_ID"
+    fi
+    if state_has 'legacy_module_backup=1' && [ -d "$LEGACY_MODULE_BACKUP" ]; then
+        rm -rf "$LEGACY_MODULE"
+        install -d -o nemo -g nemo -m 0700 "$(dirname "$LEGACY_MODULE")"
+        mv "$LEGACY_MODULE_BACKUP" "$LEGACY_MODULE"
+        chown -R nemo:nemo "$LEGACY_MODULE"
+    fi
+    if state_has 'legacy_environment_removed=1' && [ -e "$LEGACY_ENV_BACKUP" ]; then
+        install -d -m 0755 "$(dirname "$LEGACY_ENV")"
+        install -m 0644 "$LEGACY_ENV_BACKUP" "$LEGACY_ENV"
+    fi
+    if [ -e "$COMPOSITOR_BACKUP" ] && grep -q 'import Waynergy.Pointer 1.0' "$COMPOSITOR"; then
+        install -m 0644 "$COMPOSITOR_BACKUP" "$COMPOSITOR"
+        run_user 'systemctl --user restart lipstick.service' || true
+    fi
+    rm -f "$MARKER" "$STATE_FILE"
+    result RESTORED
+}
+
+rollback_if_unconfirmed() {
+    if [ -e "$MARKER" ]; then
+        write_user_state 0
+        result SUCCESS
+        exit 0
+    fi
+    restore_runtime
+}
+
+validate_request
+case "$mode" in
+    --install)
+        phase "Checking target"
+        [ "$(uname -m)" = armv7l ] || fail "This installer supports armv7l Sailfish only"
+        check_compositor_supported
+        save_root_request
+        ensure_chroot
+        install_dependencies
+        build_waynergy
+        install_runtime
+        apply_compositor_patch
+        start_rollback_timer
+        ;;
+    --restore) restore_runtime ;;
+    --rollback-if-unconfirmed) rollback_if_unconfirmed ;;
+esac

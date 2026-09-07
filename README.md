@@ -1,122 +1,130 @@
 # Sailfish Waynergy pointer
 
-An experimental Deskflow/Barrier client setup for Sailfish OS. It combines a
-small Waynergy fork using the `uinput` backend with a Lipstick QML extension
-that displays a real pointer indicator and provides a calibration UI.
+An experimental, GitHub-ready installer for sharing a Deskflow/Barrier mouse
+and keyboard with a Sailfish OS phone. It builds a custom Waynergy client in a
+Debian Bookworm armhf chroot, feeds pointer positions to Lipstick, and shows a
+global visible cursor with calibration controls.
 
-It was developed against Sailfish OS 3.2 / Lipstick Qt 5.6. It modifies the
-system compositor and virtual input path, so use it only on a device you can
-recover over SSH or developer mode.
+The packaged target is deliberately narrow: Sailfish OS 3.2 on `armv7hl`, with
+the Jolla `lipstick-jolla-home-qt5` compositor revision whose stock
+`compositor.qml` SHA-256 is recorded in `installer/root-helper`. It is not a
+generic installer for other Sailfish versions.
 
-## What it does
-
-- Connects a Sailfish phone to a Deskflow or Barrier server through Waynergy.
-- Creates virtual keyboard and relative mouse devices through `/dev/uinput`.
-- Publishes Deskflow's absolute pointer position over a local Unix datagram
-  socket (`/run/display/waynergy-pointer.sock`).
-- Adds a global Lipstick overlay, instead of a window-owned overlay, so the
-  dot survives application changes.
-- Reads the actual virtual-mouse events emitted by Lipstick and normalizes
-  their logical window coordinates to the output. This keeps the dot aligned
-  with clicks and the Deskflow edge boundary.
-- Includes a Sailfish calibration application for any residual fixed offset
-  or scale difference.
-
-## Repository layout
+## What is included
 
 | Path | Purpose |
 | --- | --- |
-| `waynergy/` | MIT-licensed Waynergy 0.0.17 source with Sailfish pointer-feed and relative-uinput changes. |
-| `pointer-plugin/` | Qt 5 QML extension (`Waynergy.Pointer`) and global pointer overlay. |
-| `calibrator/` | QML calibration application and desktop entry. |
-| `lipstick/` | Patch for the stock Jolla Lipstick `compositor.qml`; no Jolla source is included. |
-| `scripts/` | Device-side staging, build, activation, rollback, and commit helpers. |
-| `examples/` | Sanitized service, wrapper, and configuration templates. |
+| `installer-app/` | Native Sailfish Silica setup application. It prompts for the developer password through a pseudo-terminal; the password is never written to disk. |
+| `installer/root-helper` | Root-only installer, rollback, migration, chroot provisioning, and guarded Lipstick patch logic. |
+| `waynergy/` | Waynergy 0.0.17 source with the local pointer feed and Sailfish-friendly relative-`uinput` changes. |
+| `pointer-plugin/` | The system-installed `Waynergy.Pointer` Qt 5 QML extension and global overlay. |
+| `calibrator/` | Pointer calibration UI. Offset and scale are saved through the plugin. |
+| `lipstick/` | A compact patch for the supported stock compositor; no Jolla source or binary is included. |
+| `rpm/` | Sailfish RPM specification. |
+| `release/` and `.github/workflows/` | Reproducible Bookworm armhf rootfs and source-archive tooling. |
 
-## Security
+## Runtime behaviour
 
-`uinput` can generate keyboard and pointer events outside Wayland's normal
-privileged-input protocols. Treat access to its device node as privileged.
-Use Deskflow TLS, review the server's certificate trust prompt, and do not
-publish `~/.config/waynergy`, TLS keys, or device-specific calibration files.
-
-The pointer socket is local-only and the plugin creates it owner-readable and
-writable (`0600`). It is not a network service.
-
-## Install outline
-
-1. Configure Deskflow or Barrier with a client whose name matches
-   `--name`/`-N` below. Put it on the intended edge in the Deskflow layout.
-2. Build the Waynergy fork for the phone architecture. Its normal Meson build
-   is unchanged; the Sailfish deployment used a Debian ARM chroot because the
-   host system lacks development packages.
-3. Install the resulting binary and use the `uinput` backend. A service and a
-   wrapper template are in `examples/`.
-4. Build `pointer-plugin/` with the device's Qt 5 development qmake and a
-   matching Qt 5 `moc` executable, then
-   install its library, `qmldir`, and `PointerOverlay.qml` under
-   `~/.local/lib/qt5/qml/Waynergy/Pointer/`.
-5. Apply `lipstick/0001-global-pointer-overlay.patch` to the exact matching
-   stock `compositor.qml`. Back it up first. Set `QML2_IMPORT_PATH` for the
-   compositor using `examples/waynergy-pointer.conf`.
-6. Install the calibrator files under
-   `~/.local/share/waynergy-pointer-calibrator/` and
-   `~/.local/share/applications/`, then restart the user `lipstick.service`.
-7. Move the Deskflow cursor onto the phone and use **Pointer calibration** if
-   the marker needs a fixed offset or range correction.
-
-The scripts reflect the tested `/home/nemo` chroot layout. Read and adapt them
-before running: operating-system package layouts and the stock Lipstick QML
-file can differ by Sailfish release.
-
-## Example connection
-
-```sh
-waynergy -b uinput \
-  --host deskflow-server.example --port 24800 --name Sailfish \
-  --width 720 --height 1280 \
-  --enable-crypto --enable-tofu --no-clip
-```
-
-Keep the advertised width and height equal to the physical portrait output.
-Deskflow uses those dimensions to decide when the pointer leaves the phone.
-
-The companion `config.ini` needs:
-
-```ini
-[pointer]
-socket=/run/display/waynergy-pointer.sock
-```
-
-## Pointer protocol
-
-Waynergy sends a 24-byte native-endian datagram after mouse motion:
+The app’s defaults are the tested portrait phone profile:
 
 ```text
-u32 magic     0x57505452  # WPTR
-u16 version   1
-u16 flags     1 means resync
-u32 width
-u32 height
-i32 x
-i32 y
+Deskflow server: 192.168.0.102
+Port:            24800
+Screen name:     sailfish
+Output:          720 × 1280
+Chroot:          /home/nemo/chroots/deskflow-bookworm
 ```
 
-It is deliberately local and versioned. The resync flag is emitted when
-Deskflow re-enters the Sailfish screen, allowing the overlay to reapply its
-saved calibration before the next motion packet.
+All fields are editable before installation. The generated user service runs
+Waynergy as `nemo` through the chroot dynamic loader with:
 
-## Recovery
+```sh
+waynergy -b uinput -c SERVER -p PORT -W 720 -H 1280 -N sailfish -e -t -n
+```
 
-The activation helper saves a stock compositor backup and arranges a short
-rollback window. Do not mark an activation committed until Lipstick has
-restarted and the device UI is usable. If the compositor fails, restore the
-saved `compositor.qml` over SSH and restart `systemctl --user restart
-lipstick.service` as the Sailfish user.
+The keyboard and click path uses `uinput`. Waynergy also sends its local,
+versioned `WPTR` datagrams to `/run/display/waynergy-pointer.sock`; the
+Lipstick QML extension consumes those datagrams and draws the cursor globally.
+It rereads calibration on a Deskflow re-entry and when the overlay is
+resynchronized after a window change.
 
-## Licensing
+## Install on the phone
 
-The Waynergy subtree retains its upstream MIT copyright and license in
-`waynergy/LICENSE`. New integration files are MIT-licensed under this
-repository's `LICENSE`. Sailfish OS and Jolla Lipstick assets are not included;
-only a compact patch against a stock compositor file is supplied.
+1. Enable Developer mode and install the built
+   `sailfish-deskflow-setup-*.armv7hl.rpm`.
+2. Open **Deskflow setup**, check the preflight report, and adjust the server
+   settings if necessary.
+3. Choose **Install / update**. The password prompt is forwarded directly to
+   `devel-su` using a PTY, then cleared from the UI process.
+4. After Lipstick restarts, move the Deskflow pointer onto the phone and test
+   both keyboard and pointer/click input. Use **Pointer calibration** from the
+   launcher to correct any fixed offset or range difference.
+5. Within 180 seconds, choose **Pointer and UI work — keep setup**. Without
+   that confirmation the root-owned timer restores the previous service,
+   Waynergy binary, and compositor file.
+
+The installer uses an existing valid Bookworm armhf chroot as-is. If the
+selected chroot does not exist, it downloads a release rootfs only after its
+SHA-256 equals the value embedded in `rootfs-manifest.ini`. The checked-in
+manifest intentionally contains a placeholder checksum: build and publish the
+rootfs release, update the manifest, then build the distributable RPM. This
+prevents a fresh install from trusting an unpinned download.
+
+An older manual installation is migrated only when its compositor is either
+the known stock revision or the known earlier pointer patch. Its user QML path
+and compositor environment override are saved under
+`/var/lib/sailfish-deskflow-setup/` before the packaged system QML module takes
+over. Unknown compositor edits cause the installer to stop without changing
+Lipstick.
+
+## Build and release
+
+Build the rootfs on an armhf-capable Bookworm host, or use the tagged GitHub
+Actions workflow (which uses QEMU):
+
+```sh
+./release/build-rootfs.sh release-output
+./release/update-rootfs-manifest.sh release-output/bookworm-armhf-minbase.tar.gz 0.1.0
+```
+
+Commit the resulting manifest before making the RPM source archive. The
+workflow publishes `bookworm-armhf-minbase.tar.gz` and `SHA256SUMS` on tags.
+The URL convention in `update-rootfs-manifest.sh` is the public GitHub release
+asset URL for this repository.
+
+Use the Sailfish SDK (matching OS 3.2 armv7hl) to build the RPM. First create a
+clean committed source archive, then place it in the SDK RPM `SOURCES`
+directory and build the supplied spec:
+
+```sh
+./release/build-source-archive.sh 0.1.0 ~/rpmbuild/SOURCES
+rpmbuild -ba rpm/sailfish-deskflow-setup.spec
+```
+
+The source archive script uses `git archive`, so only committed changes enter
+a release artifact. The target SDK must provide Qt 5 Core, Gui, Qml, Quick,
+Silica, qmake, and the matching `moc`; building the plugin against a desktop
+Qt is not supported.
+
+## Recovery and removal
+
+Use **Restore previous setup** in the app to restore any service and Waynergy
+binary present before this package took over, restore the guarded compositor
+backup, and return legacy per-user QML files if they were migrated. It leaves
+the Debian chroot in place by design.
+
+If the compositor fails before the UI appears, connect through SSH/developer
+mode, restore the saved `/var/lib/sailfish-deskflow-setup/compositor.qml.orig`
+to `/usr/share/lipstick-jolla-home-qt5/compositor.qml`, and restart the
+user `lipstick.service`. The automatic 180-second rollback is intended to
+cover this failure path as long as the phone remains running.
+
+`uinput` can synthesize system input. Keep the device on a trusted network,
+use Deskflow TLS, and do not expose `/dev/uinput`, the pointer socket, or
+Deskflow credentials to untrusted users.
+
+## License
+
+The Waynergy subtree retains upstream’s MIT license. New integration code is
+MIT-licensed under this repository’s `LICENSE`. Sailfish OS and Jolla assets
+are not included.

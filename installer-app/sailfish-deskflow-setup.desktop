@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Deskflow setup
+Comment=Install Waynergy and the Sailfish pointer integration
+Exec=/usr/bin/sailfish-deskflow-setup
+Icon=icon-m-developer-mode
+X-Nemo-Application-Type=silica-qt5
+Categories=Settings;
