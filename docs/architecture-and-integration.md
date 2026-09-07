@@ -561,6 +561,34 @@ does not later act on a mutable user request file.
 does not delete the Bookworm chroot. The chroot can be large and may be useful
 for rebuilding; deleting it is a separate user choice.
 
+### Everyday service control after setup
+
+`waynergy-control/` is a separate native Sailfish application for normal
+day-to-day operation after the privileged setup has succeeded. It does not
+modify the compositor or require `devel-su`. It talks to the current `nemo`
+user's systemd manager and controls the service that setup installed:
+
+```text
+systemctl --user start waynergy.service
+systemctl --user stop waynergy.service
+systemctl --user restart waynergy.service
+systemctl --user enable/disable waynergy.service
+```
+
+The application asynchronously checks `is-active` and `is-enabled`, displays
+the resulting running/autostart state, and exposes Start, Stop, Restart, and
+**Start automatically after reboot** controls. `enable` makes the service part
+of the `nemo` user's default systemd target; Sailfish brings up that graphical
+user session after a normal phone boot. The service itself uses
+`Restart=always`, so a temporary Deskflow network failure is retried without
+requiring the control app to remain open.
+
+The control app uses the existing graphical session's D-Bus environment and
+falls back to the known Sailfish `nemo` runtime directory only when those
+variables are absent. It is intentionally a user-service controller, not a
+new root daemon: the only privileges it needs are the ones already granted to
+the installed `nemo` service for its virtual-input device.
+
 ## Packaging and release changes
 
 The RPM specification builds two native pieces against the Sailfish target Qt:
@@ -596,6 +624,7 @@ target-specific hash guard.
 | Calibration | `pointer-plugin/pointercalibration.*`, `calibrator/Calibrator.qml` | Persist and edit offset/scale independently of the input injection path. |
 | Compositor integration | `lipstick/0001-global-pointer-overlay.patch` | Import the module into Lipstick, keep the overlay above the whole scene, handle direct rendering, and resync after a window closes. |
 | Guided setup | `installer-app/*`, `installer/root-helper` | Add Sailfish UI, developer-mode PTY handoff, repeat validation, safe chroot build, service configuration, strict patch guard, migration, restore, and rollback. |
+| Everyday service control | `waynergy-control/*` | Add unprivileged Start, Stop, Restart, active-state, and reboot-autostart control for the installed `nemo` systemd service. |
 | Distribution | `rpm/*`, `release/*`, `.github/workflows/*` | Make the target package and verified rootfs reproducible and publishable. |
 | Documentation | `README.md`, this document | Explain support boundaries, release process, recovery, and the complete architecture. |
 

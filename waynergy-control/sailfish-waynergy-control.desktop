@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Waynergy control
+Comment=Start and manage the Sailfish Waynergy service
+Exec=/usr/bin/sailfish-waynergy-control
+Icon=icon-m-developer-mode
+X-Nemo-Application-Type=silica-qt5
+Categories=Settings;

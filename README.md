@@ -20,6 +20,7 @@ every integration change, read
 | Path | Purpose |
 | --- | --- |
 | `installer-app/` | Native Sailfish Silica setup application. It prompts for the developer password through a pseudo-terminal; the password is never written to disk. |
+| `waynergy-control/` | Native Sailfish user-service control app: start, stop, restart, status, and reboot autostart. |
 | `installer/root-helper` | Root-only installer, rollback, migration, chroot provisioning, and guarded Lipstick patch logic. |
 | `waynergy/` | Waynergy 0.0.17 source with the local pointer feed and Sailfish-friendly relative-`uinput` changes. |
 | `pointer-plugin/` | The system-installed `Waynergy.Pointer` Qt 5 QML extension and global overlay. |
@@ -67,6 +68,12 @@ resynchronized after a window change.
 5. Within 180 seconds, choose **Pointer and UI work — keep setup**. Without
    that confirmation the root-owned timer restores the previous service,
    Waynergy binary, and compositor file.
+
+After installation, use **Waynergy control** from the launcher to start, stop,
+or restart the service. Its **Start automatically after reboot** switch runs
+`systemctl --user enable/disable waynergy.service`; the installed service is
+already enabled by default and has `Restart=always` to retry a failed network
+connection.
 
 The installer uses an existing valid Bookworm armhf chroot as-is. If the
 selected chroot does not exist, it downloads a release rootfs only after its

@@ -1,6 +1,6 @@
 Name:           sailfish-deskflow-setup
 Version:        0.1.0
-Release:        1
+Release:        2
 Summary:        Guided Deskflow, Waynergy, and pointer setup for Sailfish OS
 License:        MIT
 Group:          Applications/System
@@ -24,6 +24,10 @@ pushd installer-app
 qmake sailfish-deskflow-setup.pro
 make %{?_smp_mflags}
 popd
+pushd waynergy-control
+qmake sailfish-waynergy-control.pro
+make %{?_smp_mflags}
+popd
 pushd pointer-plugin
 qmake waynergypointer.pro
 make %{?_smp_mflags}
@@ -32,8 +36,10 @@ popd
 %install
 install -d %{buildroot}/usr/bin
 install -m 0755 installer-app/sailfish-deskflow-setup %{buildroot}/usr/bin/sailfish-deskflow-setup
+install -m 0755 waynergy-control/sailfish-waynergy-control %{buildroot}/usr/bin/sailfish-waynergy-control
 install -d %{buildroot}/usr/share/applications
 install -m 0644 installer-app/sailfish-deskflow-setup.desktop %{buildroot}/usr/share/applications/
+install -m 0644 waynergy-control/sailfish-waynergy-control.desktop %{buildroot}/usr/share/applications/
 install -m 0644 calibrator/waynergy-pointer-calibrator.desktop %{buildroot}/usr/share/applications/
 install -d %{buildroot}/usr/share/sailfish-deskflow-setup
 cp -a waynergy lipstick %{buildroot}/usr/share/sailfish-deskflow-setup/
@@ -48,12 +54,16 @@ install -m 0644 pointer-plugin/PointerOverlay.qml pointer-plugin/qmldir %{buildr
 %files
 %license LICENSE
 /usr/bin/sailfish-deskflow-setup
+/usr/bin/sailfish-waynergy-control
 /usr/share/applications/sailfish-deskflow-setup.desktop
+/usr/share/applications/sailfish-waynergy-control.desktop
 /usr/share/applications/waynergy-pointer-calibrator.desktop
 /usr/share/sailfish-deskflow-setup
 /usr/libexec/sailfish-deskflow-setup
 /usr/lib/qt5/qml/Waynergy/Pointer
 
 %changelog
+* Mon Sep 08 2026 Sailfish Waynergy Pointer contributors <noreply@example.invalid> - 0.1.0-2
+- Add a user-service start, restart, and autostart control application
 * Mon Sep 08 2026 Sailfish Waynergy Pointer contributors <noreply@example.invalid> - 0.1.0-1
 - Initial developer-mode installer
