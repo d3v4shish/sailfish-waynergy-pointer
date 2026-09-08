@@ -33,6 +33,7 @@ signals:
 
 private slots:
     void commandFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void commandError(QProcess::ProcessError error);
 
 private:
     enum Operation {

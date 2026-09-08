@@ -5,7 +5,10 @@
 
 namespace {
 const char serviceName[] = "waynergy.service";
-const char systemctlPath[] = "/usr/bin/systemctl";
+// Sailfish OS 3.x installs systemctl in /bin.  Do not use /usr/bin here:
+// on the target it does not exist, which leaves a QProcess waiting forever
+// for a command that could never start.
+const char systemctlPath[] = "/bin/systemctl";
 const char runtimeDir[] = "/run/user/100000";
 }
 
@@ -21,6 +24,8 @@ WaynergyController::WaynergyController(QObject *parent)
 {
     connect(m_process, SIGNAL(finished(int,QProcess::ExitStatus)),
             this, SLOT(commandFinished(int,QProcess::ExitStatus)));
+    connect(m_process, SIGNAL(error(QProcess::ProcessError)),
+            this, SLOT(commandError(QProcess::ProcessError)));
     refresh();
 }
 
@@ -160,4 +165,17 @@ void WaynergyController::commandFinished(int exitCode, QProcess::ExitStatus exit
     }
     emit stateChanged();
     refresh();
+}
+
+void WaynergyController::commandError(QProcess::ProcessError error)
+{
+    if (error != QProcess::FailedToStart || !m_busy)
+        return;
+
+    m_operation = Idle;
+    m_busy = false;
+    m_servicePresent = false;
+    m_status = QStringLiteral("Cannot run Sailfish service manager: ")
+            + m_process->errorString();
+    emit stateChanged();
 }

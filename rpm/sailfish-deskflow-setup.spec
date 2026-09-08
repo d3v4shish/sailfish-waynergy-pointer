@@ -1,6 +1,6 @@
 Name:           sailfish-deskflow-setup
 Version:        0.1.0
-Release:        2
+Release:        3
 Summary:        Guided Deskflow, Waynergy, and pointer setup for Sailfish OS
 License:        MIT
 Group:          Applications/System
@@ -63,6 +63,9 @@ install -m 0644 pointer-plugin/PointerOverlay.qml pointer-plugin/qmldir %{buildr
 /usr/lib/qt5/qml/Waynergy/Pointer
 
 %changelog
+* Mon Sep 08 2026 Sailfish Waynergy Pointer contributors <noreply@example.invalid> - 0.1.0-3
+- Build the Waynergy control app as a mapplauncherd-compatible PIE and export its entry point
+- Use Sailfish OS 3.x's /bin/systemctl path and report service-manager launch failures
 * Mon Sep 08 2026 Sailfish Waynergy Pointer contributors <noreply@example.invalid> - 0.1.0-2
 - Add a user-service start, restart, and autostart control application
 * Mon Sep 08 2026 Sailfish Waynergy Pointer contributors <noreply@example.invalid> - 0.1.0-1

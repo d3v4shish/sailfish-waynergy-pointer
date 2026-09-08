@@ -589,6 +589,15 @@ variables are absent. It is intentionally a user-service controller, not a
 new root daemon: the only privileges it needs are the ones already granted to
 the installed `nemo` service for its virtual-input device.
 
+Sailfish launches Silica applications through `invoker` and
+`mapplauncherd`, rather than simply `exec`ing their binaries. Consequently the
+control project's qmake settings build a position-independent executable and
+export `main` in its dynamic symbol table. Both properties are required for
+the booster to load the application entry point. The controller also uses
+`/bin/systemctl`, the location used by Sailfish OS 3.x, and surfaces a
+service-manager start failure in the UI instead of leaving the status check
+busy indefinitely.
+
 ## Packaging and release changes
 
 The RPM specification builds two native pieces against the Sailfish target Qt:
